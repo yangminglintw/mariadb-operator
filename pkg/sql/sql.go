@@ -677,6 +677,37 @@ func (c *Client) UnlockTables(ctx context.Context) error {
 	return c.Exec(ctx, "UNLOCK TABLES;")
 }
 
+// KillUserConnections kills all user connections except system users (root, repl, mariadb-operator)
+// and daemon processes. This is useful during switchover to force clients to reconnect to the new primary.
+func (c *Client) KillUserConnections(ctx context.Context) error {
+	query := `
+		SELECT id FROM information_schema.processlist
+		WHERE user NOT IN ('root', 'repl', 'mariadb-operator', 'system user')
+		AND command != 'Daemon'
+	`
+	rows, err := c.db.QueryContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("error querying processlist: %v", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+
+	for _, id := range ids {
+		// Ignore errors for individual KILL commands as the connection may have already closed
+		_ = c.Exec(ctx, fmt.Sprintf("KILL %d", id))
+	}
+
+	return nil
+}
+
 func (c *Client) EnableReadOnly(ctx context.Context) error {
 	return c.SetSystemVariable(ctx, "read_only", "1")
 }

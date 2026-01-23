@@ -93,6 +93,10 @@ func (r *ReplicationReconciler) reconcileSwitchover(ctx context.Context, req *Re
 			name:      "Change primary to replica",
 			reconcile: r.changePrimaryToReplica,
 		},
+		{
+			name:      "Kill user connections on old primary",
+			reconcile: r.killUserConnectionsOnOldPrimary,
+		},
 	}
 
 	for _, p := range phases {
@@ -421,6 +425,28 @@ func (r *ReplicationReconciler) changePrimaryToReplica(ctx context.Context, req 
 		newPrimary,
 		replicaOpts...,
 	)
+}
+
+func (r *ReplicationReconciler) killUserConnectionsOnOldPrimary(ctx context.Context, req *ReconcileRequest, logger logr.Logger) error {
+	if !req.currentPrimaryReady {
+		logger.Info("Skipped killing user connections due to primary's non ready status")
+		return nil
+	}
+
+	client, err := req.replClientSet.currentPrimaryClient(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting current primary client: %v", err)
+	}
+
+	logger.Info("Killing user connections on old primary")
+	r.recorder.Event(req.mariadb, corev1.EventTypeNormal, mariadbv1alpha1.ReasonReplicationPrimaryToReplica,
+		"Killing user connections on old primary to force reconnection to new primary")
+
+	if err := client.KillUserConnections(ctx); err != nil {
+		return fmt.Errorf("error killing user connections: %v", err)
+	}
+
+	return nil
 }
 
 func (r *ReplicationReconciler) configureReplicaOpts(ctx context.Context, req *ReconcileRequest, primaryClient *sql.Client,
