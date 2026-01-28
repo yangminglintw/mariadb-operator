@@ -1,6 +1,7 @@
 package predicate
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -40,6 +41,15 @@ func PredicateChangedWithAnnotations(annotations []string, hasChanged func(old, 
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			if !hasAnnotations(e.ObjectOld, annotations) || !hasAnnotations(e.ObjectNew, annotations) {
 				return false
+			}
+			// Detect pod being deleted (DeletionTimestamp newly set)
+			// This enables graceful switchover when primary pod is deleted
+			oldPod, okOld := e.ObjectOld.(*corev1.Pod)
+			newPod, okNew := e.ObjectNew.(*corev1.Pod)
+			if okOld && okNew {
+				if oldPod.DeletionTimestamp == nil && newPod.DeletionTimestamp != nil {
+					return true
+				}
 			}
 			return hasChanged(e.ObjectOld, e.ObjectNew)
 		},

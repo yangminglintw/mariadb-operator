@@ -148,6 +148,67 @@ func (r *PodReplicationController) ReconcilePodNotReady(ctx context.Context, pod
 	return nil
 }
 
+// ReconcilePodTerminating handles graceful switchover when primary pod is being deleted.
+// This is called when DeletionTimestamp is set but pod is still Ready.
+func (r *PodReplicationController) ReconcilePodTerminating(ctx context.Context, pod corev1.Pod,
+	mariadb *mariadbv1alpha1.MariaDB) error {
+	logger := log.FromContext(ctx).WithName("pod-replication")
+
+	// Only process if replication is enabled and auto-failover is on
+	if !shouldReconcile(mariadb) {
+		return nil
+	}
+
+	// Check if this is the primary pod
+	if mariadb.Status.CurrentPrimaryPodIndex == nil {
+		logger.V(1).Info("'status.currentPrimaryPodIndex' must be set. Skipping")
+		return nil
+	}
+
+	index, err := statefulset.PodIndex(pod.Name)
+	if err != nil {
+		return fmt.Errorf("error getting Pod index: %v", err)
+	}
+
+	if *index != *mariadb.Status.CurrentPrimaryPodIndex {
+		logger.V(1).Info("Replica pod terminating, no action needed", "pod", pod.Name)
+		return nil
+	}
+
+	// Primary pod is being deleted - initiate graceful switchover
+	logger.Info("Primary pod terminating, initiating graceful switchover", "pod", pod.Name)
+	r.recorder.Eventf(mariadb, corev1.EventTypeNormal, mariadbv1alpha1.ReasonPrimarySwitching,
+		"Primary pod %s terminating, initiating graceful switchover", pod.Name)
+
+	// Find the best replica to promote (highest GTID position)
+	newPrimaryName, err := replication.NewFailoverHandler(
+		r.Client,
+		mariadb,
+		logger.WithName("graceful-switchover").V(1),
+	).FurthestAdvancedReplica(ctx)
+	if err != nil {
+		return fmt.Errorf("error finding switchover target: %v", err)
+	}
+
+	newPrimaryIndex, err := statefulset.PodIndex(newPrimaryName)
+	if err != nil {
+		return fmt.Errorf("error getting new primary index: %v", err)
+	}
+
+	primary := mariadb.Status.CurrentPrimaryPodIndex
+
+	// Patch the MariaDB spec to trigger switchover
+	// The existing reconcileSwitchover() in mariadb_controller will handle the 6-phase process
+	if err := r.patch(ctx, mariadb, func(mdb *mariadbv1alpha1.MariaDB) {
+		mdb.Spec.Replication.Primary.PodIndex = newPrimaryIndex
+	}); err != nil {
+		return fmt.Errorf("error patching MariaDB for switchover: %v", err)
+	}
+
+	logger.Info("Graceful switchover initiated", "from-primary", *primary, "to-primary", *newPrimaryIndex)
+	return nil
+}
+
 func shouldReconcile(mdb *mariadbv1alpha1.MariaDB) bool {
 	if mdb.IsMaxScaleEnabled() || mdb.IsSwitchingPrimary() || mdb.IsReplicationSwitchoverRequired() ||
 		mdb.IsRestoringBackup() || mdb.IsResizingStorage() || mdb.IsSuspended() {

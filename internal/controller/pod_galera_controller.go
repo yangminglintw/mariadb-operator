@@ -113,6 +113,16 @@ func (r *PodGaleraController) ReconcilePodNotReady(ctx context.Context, pod core
 	return nil
 }
 
+// ReconcilePodTerminating handles pod termination for Galera clusters.
+// Galera uses multi-master replication and handles node failures automatically,
+// so no special action is needed when a pod is terminating.
+func (r *PodGaleraController) ReconcilePodTerminating(ctx context.Context, pod corev1.Pod,
+	mariadb *mariadbv1alpha1.MariaDB) error {
+	// Galera handles node failures differently through its consensus protocol.
+	// No action needed for terminating pods.
+	return nil
+}
+
 func (r *PodGaleraController) shouldReconcile(mariadb *mariadbv1alpha1.MariaDB) bool {
 	if !mariadb.IsGaleraEnabled() || mariadb.IsMaxScaleEnabled() || mariadb.IsRestoringBackup() || mariadb.IsSuspended() {
 		return false

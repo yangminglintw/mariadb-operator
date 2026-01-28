@@ -18,6 +18,7 @@ import (
 type PodReadinessController interface {
 	ReconcilePodReady(context.Context, corev1.Pod, *mariadbv1alpha1.MariaDB) error
 	ReconcilePodNotReady(context.Context, corev1.Pod, *mariadbv1alpha1.MariaDB) error
+	ReconcilePodTerminating(context.Context, corev1.Pod, *mariadbv1alpha1.MariaDB) error
 }
 
 // PodController reconciles a Pod object
@@ -58,7 +59,14 @@ func (r *PodController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if mariadbpod.PodReady(&pod) {
+	// Check if pod is being deleted while still ready (graceful termination window)
+	// This enables graceful switchover before the pod terminates
+	if pod.DeletionTimestamp != nil && mariadbpod.PodReady(&pod) {
+		if err := r.podReadinessController.ReconcilePodTerminating(ctx, pod, mariadb); err != nil {
+			log.FromContext(ctx).V(1).Info("Error reconciling terminating Pod", "pod", pod.Name)
+			return ctrl.Result{Requeue: true}, nil
+		}
+	} else if mariadbpod.PodReady(&pod) {
 		if err := r.podReadinessController.ReconcilePodReady(ctx, pod, mariadb); err != nil {
 			log.FromContext(ctx).V(1).Info("Error reconciling Pod in Ready state", "pod", pod.Name)
 			return ctrl.Result{Requeue: true}, nil
