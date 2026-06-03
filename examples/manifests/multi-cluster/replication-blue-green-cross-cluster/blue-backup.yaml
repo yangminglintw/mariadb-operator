@@ -1,0 +1,30 @@
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: PhysicalBackup
+metadata:
+  name: physicalbackup-blue
+spec:
+  mariaDbRef:
+    name: mariadb-blue
+  schedule:
+    cron: "0 * * * *"
+    immediate: true
+  target: PreferReplica
+  compression: bzip2
+  storage:
+    s3:
+      bucket: multi-cluster
+      prefix: blue
+      endpoint: s3.example.test:9000
+      region: us-east-1
+      accessKeyIdSecretKeyRef:
+        name: minio
+        key: access-key-id
+      secretAccessKeySecretKeyRef:
+        name: minio
+        key: secret-access-key
+      tls:
+        enabled: true
+        caSecretKeyRef:
+          name: minio-ca
+          key: ca.crt
