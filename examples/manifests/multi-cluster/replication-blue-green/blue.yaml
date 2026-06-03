@@ -1,0 +1,61 @@
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-blue
+spec:
+  image: mariadb:10.6
+  rootPasswordSecretKeyRef:
+    name: mariadb
+    key: password
+  storage:
+    size: 1Gi
+  replicas: 2
+  replication:
+    enabled: true
+    gtidDomainId: 0
+    serverIdStartIndex: 10
+    semiSyncEnabled: false
+    replica:
+      replPasswordSecretKeyRef:
+        name: mariadb
+        key: password
+      bootstrapFrom:
+        physicalBackupTemplateRef:
+          name: physicalbackup-blue
+      recovery:
+        enabled: true
+        errorDurationThreshold: 30s
+  primaryService:
+    type: LoadBalancer
+    metadata:
+      annotations:
+        metallb.io/loadBalancerIPs: 172.18.1.20
+  multiCluster:
+    enabled: true
+    primary: mariadb-blue
+    members:
+      - name: mariadb-blue
+        externalMariaDbRef:
+          name: mariadb-blue
+      - name: mariadb-green
+        externalMariaDbRef:
+          name: mariadb-green
+  # Enable maintenance mode on Blue before promoting Green.
+  # maintenance:
+  #   enabled: true
+  #   cordon: true
+  #   drainConnections: true
+  #   drainGracePeriodSeconds: 30
+  #   readOnly: true
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: ExternalMariaDB
+metadata:
+  name: mariadb-blue
+spec:
+  host: mariadb-blue-primary.default.svc.cluster.local
+  port: 3306
+  username: root
+  passwordSecretKeyRef:
+    name: mariadb
+    key: password
